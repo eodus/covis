@@ -1,0 +1,363 @@
+---
+title: "covis_final"
+author: "R-seny, iii, Karpov Anatoliy"
+date: "Saturday, April 11, 2015"
+output: html_document
+---
+
+
+```{r, warning=FALSE, results='hide', message=FALSE}
+
+library(ggplot2)
+library(grt)
+
+set.seed(1);
+```
+
+<h1>Генерируем и визуализируем данные</h1>
+```{r}
+xs = runif(200, 0, 1)
+ys = runif(200, 0, 1)
+
+data_type = 1; # 1 - rule-based, 2 - rule-based complicated, 3 - inf.integration
+if (data_type == 1) {
+  data = data.frame(x = xs, y = ys, label = (xs < 0.25)*(ys > 0.5))
+} else if(data_type == 2) {
+  data = data.frame(x = xs, y = ys, label = (xs < 0.25)*(ys > 0.5) + (xs > 0.75)*(ys < 0.5))
+} else if(data_type == 3) {
+  data = data.frame(x = xs, y = ys, label = xs > ys)
+}
+
+xtst = runif(1000, 0, 1)
+ytst = runif(1000, 0, 1)
+
+if (data_type == 1) {
+  test = data.frame(x = xtst, y = ytst, label = (xtst < 0.25)*(ytst > 0.5))
+} else if(data_type == 2) {
+  test = data.frame(x = xtst, y = ytst, label = (xtst < 0.25)*(ytst > 0.5) + (xtst > 0.75)*(ytst < 0.5))
+} else if(data_type == 3) {
+  test = data.frame(x = xtst, y = ytst, label = xtst > ytst)
+}
+
+plot(xs, ys, col = rgb(data$label, 1-data$label, 0), pch = 19, main = "Training data")
+legend(1.05, 1.04, c("Categiry A", "Category B"), col = c("green", "red"), pch = 19, inset = c(0, 1.2))
+
+plot(xtst, ytst, col = rgb(test$label, 1-test$label, 0), pch = 19, main = "Test data")
+legend(1.05, 1.04, c("Categiry A", "Category B"), col = c("green", "red"), pch = 19, inset = c(0, 1.2))
+```
+
+
+<h1>Имплицитная система (процедурное обучение)</h1>
+```{r, warning=FALSE}
+##### IMPLICIT SYSTEM #####
+
+## Constants
+
+LAYER_1 = merge(seq(0,1,length.out = 100), seq(0,1,length.out = 100))
+D_base = 0.20
+D_level = 0.20
+alpha_w = 0.065
+beta_w = 0.019
+gamma_w = 0.02
+Theta_NMDA = 0.01
+Theta_AMPA = 0.022
+w_max = 1;
+
+Predicted_reward = 0;
+Obtained_reward = 0;
+
+w = replicate(2, 0.001 + 0.0025*runif(10000, 0, 1))
+colnames(w) = c("A", "B")
+
+
+### Вспомогательные функции
+
+plus_fun = function(x) {
+  ifelse(x >= 0, x, 0)
+}
+
+upper_one = function(x) {
+  ifelse(x <= 1, x, 1)
+}
+
+#### Активация первого слоя (radial basis function)
+dist_activation = function(stim, layer) {  
+  alpha = abs(max(layer) - min(layer))*0.05;
+  activation = exp(-((layer$x - stim[1])**2 + (layer$y - stim[2])**2)/alpha)
+  return(activation)
+}
+
+#### Классификация одного примера с помощью имплицитной системы (+обучение). 
+## Если нужна только классификация (без обучения), передаём параметр label = NA
+trial_imp = function(stimulus = c(0.5, 0.5), label = 1) {
+  
+  activ_1 = dist_activation(stimulus, LAYER_1)
+
+  activ_2 = activ_1 %*% w
+
+  response = (activ_2[1] >= activ_2[2])
+  
+  Predicted_reward <<- Predicted_reward + 0.025*(Obtained_reward - Predicted_reward)
+  
+  if(!is.na(label)){
+    Obtained_reward <<- -(label != response) + (label == response)
+  } else {
+    Obtained_reward <<- 0;
+  }
+  
+  RPE = Obtained_reward - Predicted_reward
+ 
+  D_level <<- ifelse(RPE >= 1, 1, 
+                   ifelse(RPE<1&RPE >-0.25, 0.8*RPE+0.2, 0)) 
+  
+  j = c(activ_2[1]/sum(activ_2), activ_2[2]/sum(activ_2))
+  
+  for(i in 1:2) {
+  w[, i] <<- w[, i] + alpha_w*activ_1*plus_fun(j[i] - Theta_NMDA)*plus_fun(D_level - D_base)*(w_max - w[, i]) 
+   - beta_w*activ_1*plus_fun(j[i] - Theta_NMDA)*plus_fun(D_base - D_level)*(w[, i])
+   - gamma_w*activ_1*plus_fun(plus_fun(Theta_NMDA - j[i]) - Theta_AMPA)*w[,i]
+  }  
+  return(c(activ_2[1], activ_2[2]))
+}
+
+plot(c(0,1), c(0,1), col = rgb(1,1,1, 1), xlab = "Stimulus dimension 1", ylab = "Stimulus dimension 2", main = "Classification training");
+legend(1.05, 1.04, c("Correct", "Incorrect"), col = c("green", "red"), pch = 19, inset = c(0, 1.2))
+for (i in 0:1000) {
+  
+  i =  i %% (nrow(data)) + 1;
+  
+ # Sys.sleep(0.1)
+  
+  point = c(data$x[i], data$y[i])
+  label = data$label[i]
+  ans = trial_imp(point, label)
+  color = rgb((1 - (ans[1]>=ans[2]) == label), (ans[1]>=ans[2]) == label, 0, 1)
+    
+  points(point[1], point[2], col = color, pch = 19)  
+    
+}
+
+print(ggplot(LAYER_1, aes(x,y,col=w[,1]))+
+geom_point()+
+xlab("Dimension №1")+
+ylab("Dimension №2")+
+ggtitle("Weights for category A")+
+labs(col='Weights') )
+
+print(ggplot(LAYER_1, aes(x,y,col=w[,2]))+
+geom_point()+
+xlab("Dimension №1")+
+ylab("Dimension №2")+
+ggtitle("Weights for category B")+
+labs(col='Weights') )
+
+
+print(ggplot(LAYER_1, aes(x,y,col=w[,2]-w[,1]))+
+geom_point()+
+xlab("Dimension №1")+
+ylab("Dimension №2")+
+ggtitle("Difference in weights")+
+labs(col='Weights') )
+
+
+plot(c(0,1), c(0,1), col = rgb(1,1,1, 1), main = "Classification test", xlab = "Stimulus dimension 1", ylab = "Stimulus dimension 2");
+legend(1.05, 1.04, c("Correct", "Incorrect"), col = c("green", "red"), pch = 19)
+
+for ( i in 1:(nrow(test))){
+  
+  point = c(test$x[i], test$y[i])
+  label = test$label[i]
+  ans = trial_imp(point, NA)
+  
+  color = rgb((1 - (ans[1]>=ans[2]) == label), (ans[1]>=ans[2]) == label, 0, 1)
+  
+  points(point[1], point[2], col = color, pch = 19)  
+    
+}
+
+set.seed(1)
+
+in_one = function(x) {
+  a = ifelse(x <= 1, x, 1) 
+  return(ifelse(a >= 0, a, 0) )
+  
+}
+
+xs = runif(200, 0, 1)
+ys = runif(200, 0, 1)
+
+
+```
+
+<h1>Эксплицитная система</h1>
+```{r, warning=FALSE}
+
+Rc <- list() # N-vector of rules (coefficients: b0 + b1 + b2), e.g.: x1 - C
+Rc[[1]] <- c(0.5)
+Rc[[2]] <- c(0.5)
+Rc[[3]] <- c(0.5, 0.5)
+
+R <- list();
+
+R[[1]] = function(stimulus) {
+  return(stimulus[1] - Rc[[1]])
+}
+
+R[[2]] = function(stimulus) {
+  return(stimulus[2] - Rc[[2]])
+}
+
+R[[3]] = function(stimulus) {
+  return( ( (Rc[[3]][1] - stimulus[1] > 0) * (Rc[[3]][2] - stimulus[2] < 0) - 0.5 ) * 
+            mean(abs(stimulus - Rc[[3]]) ) 
+          )
+}
+
+
+Z <- c(rep(0, length(R))) # N-vector of rules salience. Updated every trial
+deltaC = 0.0025 # Salience updater if correct
+deltaE = 0.02 # Salience updater if error
+Y <- c(rep(0, length(R))) # N-vector of weights. Updated every trial
+gamma = 1 # Perseveration constant
+lambda = 5 # mean and variance for X
+X <- rpois(10000, lambda) # N-vector - selection parameter for rules, Poisson distributed
+P <- 0  # N-vector of probabilities for every rule 
+sigma <- 0
+noise <- rnorm(10000, mean = 0, sd = sigma)
+
+grad_sigma = 0.005;
+
+previous_correct <- 0 # accuracy of previous trial
+previous_rule <- 1 # number of rule used in previous trial
+previous_stimuli <- data.frame(x1 = NA, x2 = NA, label = NA)
+
+
+update = function(rule_n, stimulus, ans, lable) {
+  if(rule_n == 1) {
+    Rc[[rule_n]][1] <<- in_one(Rc[[rule_n]][1] - grad_sigma*(ans < lable) + grad_sigma*(ans > lable))
+  } else if(rule_n == 2) {
+    Rc[[rule_n]][1] <<- in_one(Rc[[rule_n]][1] - grad_sigma*(ans < lable) + grad_sigma*(ans > lable))
+  } 
+  else if(rule_n == 3) {
+    if(ans != lable) {
+      Rc[[rule_n]][1] <<- in_one(Rc[[rule_n]][1] - grad_sigma*(sign(Rc[[rule_n]][2] - stimulus[2]))*(-1)**(ans > lable))                           
+      Rc[[rule_n]][2] <<- in_one(Rc[[rule_n]][2] - grad_sigma*(sign(Rc[[rule_n]][1] - stimulus[1]))*(-1)**(ans > lable))                           
+    }
+  }
+}
+
+trial_exp <- function(stimulus = c(0.5, 0.5), label = 1) {
+  
+  epsilon <- sample(noise, 1)
+  x = sample(X, 1)
+  
+  #
+  if (previous_correct == 1) {                     # IF PREVIOUS CORRECT
+    
+    r <- unlist(R[previous_rule])                         # use successful rule
+    Z[previous_rule] <<- Z[previous_rule] + deltaC # changing weight after previous correct
+    Y[previous_rule] <<- Z[previous_rule] + gamma             # perseveration of used rule
+    k = sample(length(R), 1);
+    Y[k] <<- Z[k] + x   # selection (choosing a 'creative' rule)
+
+  } else {                                        # IF PREVIOUS INCORRECT
+    
+    
+    ## is in_one necessary?
+    Z[previous_rule] <<- in_one(Z[previous_rule] - deltaE) # changing weight after previous error
+    Y[previous_rule] <<- Z[previous_rule] + gamma             # perseveration of used rule
+    k = sample(length(R), 1);
+    Y[k] <<- Z[k] + x   # selection (choosing a 'creative' rule)
+    P = Y / sum(Y)
+    
+    new_rule <- sample(1:(length(R)), 1, prob = P)
+    
+    Rule <- R[[new_rule]]          # new rule
+    
+    previous_rule <<- new_rule
+  }
+  
+  hE <- Rule(stimulus) # applying the rule
+    
+  # updating decision bound for used rule
+  if(!is.na(label)) {
+    update(new_rule, stimulus, hE - epsilon >= 0, label)
+  } else {
+    previous_correct = sample(0:1, 1)
+  }
+  
+  return(hE - epsilon)
+}
+
+
+plot(c(0,1), c(0,1), col = rgb(1,1,1, 1), xlab = "Stimulus dimension 1", ylab = "Stimulus dimension 2", main = "Classification training");
+
+for (i in 0:10000){
+  
+  i = i %% nrow(data) + 1;
+  
+  #Sys.sleep(0.01)
+  
+  ans = (trial_exp(stimulus = c(data$x[i], data$y[i]), label = data$label[i]) >= 0);
+  
+  point = c(data$x[i], data$y[i])
+  
+  label = data$label[i]
+  color = rgb(1 - (ans == label), (ans == label), 0, 1)
+  
+  points(point[1], point[2], col = color, pch = 19)  
+  
+  #abline(h = Rc[[3]][1])
+  #abline(v = Rc[[3]][2])
+  
+}
+
+
+plot(c(0,1), c(0,1), col = rgb(1,1,1, 1), xlab = "Stimulus dimension 1", ylab = "Stimulus dimension 2", main = "Classification test and a criterion for the conjuntion rule");
+
+for (i in 0:1000) {
+  
+  i = i %% nrow(data) + 1;
+  
+  #Sys.sleep(0.1)
+  
+  ans = trial_exp(stimulus = c(test$x[i], test$y[i]), label = NA) >= 0;
+ # ans = (R[[3]](stimulus = c(test$x[i], test$y[i])) >= 0);
+  
+  
+  point = c(test$x[i], test$y[i])
+  
+  label = test$label[i]
+  color = rgb(1 - (ans == label), (ans == label), 0, 1)
+  
+  points(point[1], point[2], col = color, pch = 19)  
+  
+  abline(v = Rc[[3]][1])
+  abline(h = Rc[[3]][2])
+
+}
+
+```
+
+<h1>Разрешение конфликта между системами (to do)</h1>
+```{r, warning=FALSE}
+#hE_max <- 
+#hP_max <- 
+
+Theta_E = 0.99
+Theta_P = 1 - Theta_E
+
+## To do
+resolve_competition <- function(hE, SA, SB, thetaE){
+  # returns TRUE if explicit system wins
+  
+  thetaP <- 1 - thetaE
+  hE_norm <- abs(hE / hE_max)
+  
+  hP = abs(SA - SB)
+  hP_max = max(hP, hP_max)
+  hP_norm <- hP / hP_max
+  
+  return( (thetaE * hE_norm) >= (thetaP * hP_norm) )
+}
+```
